@@ -45,129 +45,110 @@ class LossLayer:
         diff[0] = 2 * (pred[0] - label)
         return diff
 
-class LSTMParamInit:
+class GRUParamInit:
     def __init__(self,cell_count,x_dim):
         self.cell_count = cell_count
         self.x_dim = x_dim
         joinlen = cell_count + x_dim
         
         #init weight matrices
-        self.wf = init_wt(cell_count,joinlen)
-        self.wi = init_wt(cell_count,joinlen)
+        self.wr = init_wt(cell_count,joinlen)
+        self.wz = init_wt(cell_count,joinlen)
         self.wg = init_wt(cell_count,joinlen)
-        self.wo = init_wt(cell_count,joinlen)
         
         #init bias vecs
-        self.bf = init_bias(cell_count) 
-        self.bi = init_bias(cell_count) 
+        self.br = init_bias(cell_count) 
+        self.bz = init_bias(cell_count) 
         self.bg = init_bias(cell_count) 
-        self.bo = init_bias(cell_count) 
         
         #init derivative matrices
-        self.wf_diff = np.zeros((cell_count,joinlen)) 
-        self.wi_diff = np.zeros((cell_count,joinlen))
+        self.wr_diff = np.zeros((cell_count,joinlen)) 
+        self.wz_diff = np.zeros((cell_count,joinlen))
         self.wg_diff = np.zeros((cell_count,joinlen))
-        self.wo_diff = np.zeros((cell_count,joinlen))
-        self.bf_diff = np.zeros(cell_count) 
-        self.bi_diff = np.zeros(cell_count) 
+        self.br_diff = np.zeros(cell_count) 
+        self.bz_diff = np.zeros(cell_count) 
         self.bg_diff = np.zeros(cell_count) 
-        self.bo_diff = np.zeros(cell_count) 
-    
-    def update(self,lr=0.01):
-        self.wf -= lr * self.wf_diff
-        self.wi -= lr * self.wi_diff
-        self.wg -= lr * self.wg_diff
-        self.wo -= lr * self.wo_diff
         
-        self.bf -= lr * self.bf_diff
-        self.bi -= lr * self.bi_diff
+    def update(self,lr=0.01):
+        self.wr -= lr * self.wr_diff
+        self.wz -= lr * self.wz_diff
+        self.wg -= lr * self.wg_diff
+        
+        self.br -= lr * self.br_diff
+        self.bz -= lr * self.bz_diff
         self.bg -= lr * self.bg_diff
-        self.bo -= lr * self.bo_diff
         
         # reset derivatives to zero (every loop)
-        self.wf_diff = np.zeros_like(self.wf)
-        self.wi_diff = np.zeros_like(self.wi) 
+        self.wr_diff = np.zeros_like(self.wr)
+        self.wz_diff = np.zeros_like(self.wz) 
         self.wg_diff = np.zeros_like(self.wg) 
-        self.wo_diff = np.zeros_like(self.wo) 
         
-        self.bf_diff = np.zeros_like(self.bf)
-        self.bi_diff = np.zeros_like(self.bi) 
+        self.br_diff = np.zeros_like(self.br)
+        self.bz_diff = np.zeros_like(self.bz) 
         self.bg_diff = np.zeros_like(self.bg) 
-        self.bo_diff = np.zeros_like(self.bo) 
-    
-class LSTMStateInit:
+        
+class GRUStateInit:
     def __init__(self, cell_count, x_dim):
-        self.f = np.zeros(cell_count)
-        self.i = np.zeros(cell_count)
+        self.r = np.zeros(cell_count)
+        self.z = np.zeros(cell_count)
         self.g = np.zeros(cell_count)
-        self.o = np.zeros(cell_count)
-        self.c = np.zeros(cell_count)
         self.h = np.zeros(cell_count)
         self.bottom_diff_h = np.zeros_like(self.h)
-        self.bottom_diff_c = np.zeros_like(self.c)
 
-class LSTMNode:
+class GRUNode:
     def __init__(self,param,state):
         self.state = state
         self.param = param
         self.xc = None
     
-    def cellinit(self,x,c_prev=None,h_prev=None):
+    def cellinit(self,x,h_prev=None):
         
-        if(c_prev is None):
-            c_prev = np.zeros_like(self.state.c)
         if(h_prev is None):
             h_prev = np.zeros_like(self.state.h)
         
-        self.c_prev = c_prev
         self.h_prev = h_prev
         
         #concat h and x
         xc = np.hstack((x,  h_prev))
-        self.state.f = sigmoid(np.dot(self.param.wf, xc) + self.param.bf)
-        self.state.i = sigmoid(np.dot(self.param.wi, xc) + self.param.bi)
+        self.state.r = sigmoid(np.dot(self.param.wr, xc) + self.param.br)
+        self.state.z = sigmoid(np.dot(self.param.wz, xc) + self.param.bz)
+        #self.state.g = tanh(np.dot(self.param.wg1, (self.state.r*h_prev)) + np.dot(self.param.wg2,x) + self.param.bg)
+        #shape issues above ^^^
         self.state.g = tanh(np.dot(self.param.wg, xc) + self.param.bg)
-        self.state.o = sigmoid(np.dot(self.param.wo, xc) + self.param.bo)
-        
-        self.state.c= self.state.g * self.state.i + c_prev * self.state.f
-        self.state.h = self.state.o * tanh(self.state.c)
+        #simplified write gate above^^^
+        self.state.h= self.state.g * self.state.z + h_prev * (1-self.state.z)
         
         self.xc = xc
     
-    def errcalc(self,err_h,err_c):
-        dc = self.state.o * err_h + err_c
-        do = self.state.c * err_h
-        di = self.state.g * dc
-        dg = self.state.i * dc
-        df = self.c_prev * dc
+    def errcalc(self,err_h):
+        dh = err_h
+        d3 = self.state.g * dh #i-3
+        d1 = self.state.z * dh #g-1
+        d2 = self.h_prev * dh #f-2
         
-        di_input = sig_diff(self.state.i) * di 
-        df_input = sig_diff(self.state.f) * df 
-        do_input = sig_diff(self.state.o) * do 
-        dg_input = tanh_diff(self.state.g) * dg
+        dz_input = sig_diff(self.state.z) * d3 
+        dr_input = sig_diff(self.state.r) * d2 
+        dg_input = tanh_diff(self.state.g) * d1
 
         # diffs wrt inputs
-        self.param.wi_diff += np.outer(di_input, self.xc)
-        self.param.wf_diff += np.outer(df_input, self.xc)
-        self.param.wo_diff += np.outer(do_input, self.xc)
+        self.param.wz_diff += np.outer(dz_input, self.xc)
+        self.param.wr_diff += np.outer(dr_input, self.xc)
         self.param.wg_diff += np.outer(dg_input, self.xc)
-        self.param.bi_diff += di_input
-        self.param.bf_diff += df_input       
-        self.param.bo_diff += do_input
+        self.param.bz_diff += dz_input
+        self.param.br_diff += dr_input       
         self.param.bg_diff += dg_input       
 
         # compute diffs
         dxc = np.zeros_like(self.xc)
-        dxc += np.dot(self.param.wi.T, di_input)
-        dxc += np.dot(self.param.wf.T, df_input)
-        dxc += np.dot(self.param.wo.T, do_input)
+        dxc += np.dot(self.param.wz.T, dz_input)
+        dxc += np.dot(self.param.wr.T, dr_input)
         dxc += np.dot(self.param.wg.T, dg_input)
 
         # save diffs
-        self.state.bottom_diff_c = dc * self.state.f
+        #self.state.bottom_diff_c = dh * self.state.f
         self.state.bottom_diff_h = dxc[self.param.x_dim:]
 
-class LSTMNet:
+class GRUNet:
     def __init__(self,param):
         self.param = param
         self.nodelist = list()
@@ -179,8 +160,8 @@ class LSTMNet:
         index = len(self.x_list) - 1
         loss = losslayer.loss(self.nodelist[index].state.h, y_list[index])
         diff_h = losslayer.bottom_diff(self.nodelist[index].state.h, y_list[index])
-        diff_c = np.zeros(self.param.cell_count)
-        self.nodelist[index].errcalc(diff_h, diff_c)
+        #diff_c = np.zeros(self.param.cell_count)
+        self.nodelist[index].errcalc(diff_h)
         index-=1
         
         # we also propagate error along constant error carousel using diff_c (according to src 2)
@@ -188,8 +169,8 @@ class LSTMNet:
             loss += losslayer.loss(self.nodelist[index].state.h, y_list[index])
             diff_h = losslayer.bottom_diff(self.nodelist[index].state.h, y_list[index])
             diff_h += self.nodelist[index + 1].state.bottom_diff_h
-            diff_c = self.nodelist[index + 1].state.bottom_diff_c
-            self.nodelist[index].errcalc(diff_h, diff_c)
+            #diff_c = self.nodelist[index + 1].state.bottom_diff_c
+            self.nodelist[index].errcalc(diff_h)
             index -= 1 
         return loss
     
@@ -199,14 +180,13 @@ class LSTMNet:
     def x_list_add(self,x):
         self.x_list.append(x)
         if len(self.x_list) > len(self.nodelist):
-            lstm_state = LSTMStateInit(self.param.cell_count, self.param.x_dim)
-            self.nodelist.append(LSTMNode(self.param, lstm_state))
+            gru_state = GRUStateInit(self.param.cell_count, self.param.x_dim)
+            self.nodelist.append(GRUNode(self.param, gru_state))
         
         index = len(self.x_list) - 1
         if index == 0:
             # no recurrent inputs yet
             self.nodelist[index].cellinit(x)
         else:
-            c_prev = self.nodelist[index - 1].state.c
             h_prev = self.nodelist[index - 1].state.h
-            self.nodelist[index].cellinit(x, c_prev, h_prev)
+            self.nodelist[index].cellinit(x, h_prev)
