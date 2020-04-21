@@ -8,6 +8,7 @@ __pycache__/
 
 #some text files
 *.txt
+*.npy
 
 # Distribution / packaging
 .Python
